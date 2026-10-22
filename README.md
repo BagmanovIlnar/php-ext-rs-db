@@ -31,6 +31,14 @@ Design plan: [`RS_DATABASE_CONNECT_PLAN_RUST_HEARTBEAT.md`](RS_DATABASE_CONNECT_
 | OpenSSL | For PostgreSQL TLS (`postgres-openssl`) |
 | Oracle Instant Client | Only when building with `--features oracle` |
 
+## Prebuilt releases
+
+GitHub Releases (`v*`) attach archives:
+
+`rs_database_connect-<ver>-<os>-<arch>-php<x.y>-nts-postgres.tar.gz`
+
+Inside: `rs_database_connect.so` / `.dylib`, `.ini`, stub, `INSTALL.txt`.
+
 ## Build
 
 ```bash

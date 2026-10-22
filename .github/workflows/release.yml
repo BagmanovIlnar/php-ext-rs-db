@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }} PHP ${{ matrix.php }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        php: ["8.2", "8.3", "8.4", "8.5"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: none
+          coverage: none
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
+          "$PHP_CONFIG" --version
+          cargo build --release --features postgres
+
+          case "${{ matrix.os }}" in
+            ubuntu-*) OS_ID=linux ;;
+            macos-*)  OS_ID=macos ;;
+            *) echo "unsupported matrix.os"; exit 1 ;;
+          esac
+          ARCH="$(uname -m)"
+          PHP_VER="${{ matrix.php }}"
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+
+          case "$(uname -s)" in
+            Linux)  SRC="target/release/librs_database_connect.so";  EXT="so" ;;
+            Darwin) SRC="target/release/librs_database_connect.dylib"; EXT="dylib" ;;
+            *) echo "unsupported OS"; exit 1 ;;
+          esac
+          test -f "$SRC"
+
+          php -d "extension=$PWD/$SRC" -r \
+            'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") ? 0 : 1);'
+
+          STAGE="dist/rs_database_connect"
+          rm -rf dist
+          mkdir -p "$STAGE"
+          cp "$SRC" "$STAGE/rs_database_connect.${EXT}"
+          cp stubs/rs_database_connect.stub.php "$STAGE/"
+
+          cat > "$STAGE/rs_database_connect.ini" <<EOF
+          extension=rs_database_connect
+          zend.exception_ignore_args=On
+          rs_database_connect.max_connections_per_process=2
+          rs_database_connect.idle_validate_ms=60000
+          rs_database_connect.session_reset=1
+          rs_database_connect.lob_max_bytes=16777216
+          rs_database_connect.stmt_cache_size=20
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("dist/rs_database_connect/rs_database_connect.ini")
+          lines = [ln.lstrip() for ln in p.read_text().splitlines()]
+          p.write_text("\n".join(lines) + "\n")
+          PY
+
+          cat > "$STAGE/INSTALL.txt" <<EOF
+          rs_database_connect ${VER}
+          Platform: ${OS_ID} ${ARCH}
+          PHP: ${PHP_VER} NTS
+          Features: postgres
+
+          1. Copy rs_database_connect.${EXT} into \$(php-config --extension-dir)
+          2. Enable via ini: extension=rs_database_connect
+             (or copy rs_database_connect.ini into conf.d)
+          3. Restart php-fpm / web SAPI
+          4. php -m | grep rs_database_connect
+          EOF
+
+          ARCHIVE="rs_database_connect-${VER}-${OS_ID}-${ARCH}-php${PHP_VER}-nts-postgres.tar.gz"
+          tar -C dist -czf "$ARCHIVE" rs_database_connect
+          shasum -a 256 "$ARCHIVE" | tee "${ARCHIVE}.sha256"
+          ls -la "$ARCHIVE" "${ARCHIVE}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rsdb-${{ matrix.os }}-php${{ matrix.php }}
+          path: |
+            rs_database_connect-*.tar.gz
+            rs_database_connect-*.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List assets
+        run: find artifacts -type f | sort
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## rs_database_connect `${{ github.ref_name }}`
+
+            Prebuilt **NTS** binaries (**PostgreSQL** feature).
+
+            Each `.tar.gz` contains:
+            - `rs_database_connect.so` or `.dylib`
+            - `rs_database_connect.ini`
+            - `rs_database_connect.stub.php`
+            - `INSTALL.txt`
+
+            Download the archive matching your OS / arch / PHP version.
+
+            Oracle builds are not in this matrix yet (local: `cargo build --release --features postgres,oracle`).
+          files: |
+            artifacts/rs_database_connect-*.tar.gz
+            artifacts/rs_database_connect-*.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
