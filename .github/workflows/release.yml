@@ -151,20 +151,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # setup-php on Windows has no php-config; ext-php-rs downloads the
-          # matching windows.php.net devel pack from `php.exe`.
-          unset PHP_CONFIG || true
-          export PHP="$(command -v php)"
-          test -n "$PHP"
-          echo "PHP=$PHP"
+          # setup-php has no php-config on Windows. Do not set PHP from
+          # `command -v php` (Git Bash path without .exe) — ext-php-rs then
+          # errors with "php executable not found at C:/tools/php/php".
+          # Unset PHP so find_php() uses `where php` → real php.exe path.
+          unset PHP PHP_CONFIG || true
+          export RUSTUP_TOOLCHAIN=nightly
+          export RUSTFLAGS="-C linker=rust-lld"
+          where php
           php -v
           php -i | grep -i 'Thread Safety' || true
-          # rust-lld is configured in .cargo/config.toml for windows-msvc
           cargo +nightly build --release --features postgres
 
           SRC="target/release/rs_database_connect.dll"
           test -f "$SRC"
-          php -d "extension=$PWD/$SRC" -r \
+          DIR="$(pwd -W)"
+          php -d "extension=${DIR}/${SRC}" -r \
             'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") ? 0 : 1);'
 
           VER="${GITHUB_REF_NAME#v}"

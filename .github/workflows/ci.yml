@@ -114,12 +114,17 @@ jobs:
           php -i | grep -i 'Thread Safety' || true
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            unset PHP_CONFIG || true
-            export PHP="$(command -v php)"
-            test -n "$PHP"
-            echo "PHP=$PHP"
+            # Do NOT set PHP from `command -v` (Git Bash path without .exe).
+            # ext-php-rs then fails: "php executable not found at C:/tools/php/php".
+            # Leave PHP unset so find_php() uses `where php` → php.exe.
+            unset PHP PHP_CONFIG || true
+            export RUSTUP_TOOLCHAIN=nightly
+            export RUSTFLAGS="-C linker=rust-lld"
+            where php
             cargo +nightly build --release --features postgres
             EXT="target/release/rs_database_connect.dll"
+            # php.exe needs a Windows path, not /d/a/...
+            DIR="$(pwd -W)"
           else
             export PHP_CONFIG="$(command -v php-config)"
             echo "PHP_CONFIG=$PHP_CONFIG"
@@ -129,10 +134,11 @@ jobs:
               Linux)  EXT="target/release/librs_database_connect.so" ;;
               Darwin) EXT="target/release/librs_database_connect.dylib" ;;
             esac
+            DIR="$PWD"
           fi
 
           test -f "$EXT"
-          php -d "extension=$PWD/$EXT" -r \
+          php -d "extension=${DIR}/${EXT}" -r \
             'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") && ini_get("rs_database_connect.lob_max_bytes") !== false ? 0 : 1);'
 
   integration-pg:
