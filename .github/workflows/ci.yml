@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-unit:
+    name: Rust unit (postgres)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install PHP headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php8.3-cli php8.3-dev libssl-dev pkg-config clang libclang-dev
+      - name: Unit tests
+        env:
+          PHP_CONFIG: php-config
+        run: cargo test --lib --features postgres
+
+  rust-unit-oracle-compile:
+    name: Compile with oracle feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - name: Build postgres+oracle
+        env:
+          PHP_CONFIG: php-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          cargo build --features postgres,oracle
+
+  php-matrix:
+    name: Build PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.3", "8.4", "8.5"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: none
+          coverage: none
+      - name: Build extension
+        env:
+          PHP_CONFIG: php-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          cargo build --release --features postgres
+          php -d extension="$PWD/target/release/librs_database_connect.so" -r \
+            'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") && ini_get("rs_database_connect.lob_max_bytes") !== false ? 0 : 1);'
+
+  integration-pg:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: rsdb
+          POSTGRES_PASSWORD: rsdb
+          POSTGRES_DB: rsdb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rsdb -d rsdb_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+      - name: Build and smoke
+        env:
+          PHP_CONFIG: php-config
+          RSDB_DSN: "pg://rsdb:rsdb@127.0.0.1:5432/rsdb_test"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          cargo build --features postgres
+          php -d extension="$PWD/target/debug/librs_database_connect.so" tests/smoke_pg.php
