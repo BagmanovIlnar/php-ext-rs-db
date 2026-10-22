@@ -151,9 +151,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export PHP_CONFIG="$(command -v php-config)"
-          echo "PHP_CONFIG=$PHP_CONFIG"
-          "$PHP_CONFIG" --version
+          # setup-php on Windows has no php-config; ext-php-rs downloads the
+          # matching windows.php.net devel pack from `php.exe`.
+          unset PHP_CONFIG || true
+          export PHP="$(command -v php)"
+          test -n "$PHP"
+          echo "PHP=$PHP"
+          php -v
           php -i | grep -i 'Thread Safety' || true
           # rust-lld is configured in .cargo/config.toml for windows-msvc
           cargo +nightly build --release --features postgres
