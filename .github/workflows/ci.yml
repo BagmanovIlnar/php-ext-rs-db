@@ -16,14 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install PHP headers
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: none
+          coverage: none
+      - name: Build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y php8.3-cli php8.3-dev libssl-dev pkg-config clang libclang-dev
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
       - name: Unit tests
-        env:
-          PHP_CONFIG: php-config
-        run: cargo test --lib --features postgres
+        run: |
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
+          "$PHP_CONFIG" --version
+          cargo test --lib --features postgres
 
   rust-unit-oracle-compile:
     name: Compile with oracle feature
@@ -34,12 +41,14 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
+          tools: none
+          coverage: none
       - name: Build postgres+oracle
-        env:
-          PHP_CONFIG: php-config
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
           cargo build --features postgres,oracle
 
   php-matrix:
@@ -58,11 +67,12 @@ jobs:
           tools: none
           coverage: none
       - name: Build extension
-        env:
-          PHP_CONFIG: php-config
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
+          "$PHP_CONFIG" --version
           cargo build --release --features postgres
           php -d extension="$PWD/target/release/librs_database_connect.so" -r \
             'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") && ini_get("rs_database_connect.lob_max_bytes") !== false ? 0 : 1);'
@@ -90,12 +100,15 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
+          tools: none
+          coverage: none
       - name: Build and smoke
         env:
-          PHP_CONFIG: php-config
           RSDB_DSN: "pg://rsdb:rsdb@127.0.0.1:5432/rsdb_test"
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
           cargo build --features postgres
           php -d extension="$PWD/target/debug/librs_database_connect.so" tests/smoke_pg.php
