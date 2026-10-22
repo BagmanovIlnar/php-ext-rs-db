@@ -51,7 +51,7 @@ jobs:
           export PHP_CONFIG="$(command -v php-config)"
           "$PHP_CONFIG" --version
           php -i | grep -i 'Thread Safety' || true
-          cargo build --release --features postgres
+          cargo build --release --features postgres,oracle
 
           case "${{ matrix.os }}" in
             ubuntu-*) OS_ID=linux ;;
@@ -88,15 +88,16 @@ jobs:
           rs_database_connect ${VER}
           Platform: ${OS_ID} ${ARCH}
           PHP: ${PHP_VER} ${TS}
-          Features: postgres
+          Drivers: PostgreSQL + Oracle (Instant Client required at runtime for OCI)
 
           1. Copy rs_database_connect.${EXT} into \$(php-config --extension-dir)
           2. Enable: extension=rs_database_connect
-          3. Restart SAPI; php -m | grep rs_database_connect
+          3. For Oracle: install Instant Client and put it on LD_LIBRARY_PATH / PATH
+          4. Restart SAPI; php -m | grep rs_database_connect
           EOF
           python3 -c "from pathlib import Path; p=Path('dist/rs_database_connect/INSTALL.txt'); p.write_text('\n'.join(l.lstrip() for l in p.read_text().splitlines())+'\n')"
 
-          ARCHIVE="rs_database_connect-${VER}-${OS_ID}-${ARCH}-php${PHP_VER}-${TS}-postgres.tar.gz"
+          ARCHIVE="rs_database_connect-${VER}-${OS_ID}-${ARCH}-php${PHP_VER}-${TS}.tar.gz"
           tar -C dist -czf "$ARCHIVE" rs_database_connect
           shasum -a 256 "$ARCHIVE" | tee "${ARCHIVE}.sha256"
 
@@ -161,7 +162,7 @@ jobs:
           where php
           php -v
           php -i | grep -i 'Thread Safety' || true
-          cargo +nightly build --release --features postgres
+          cargo +nightly build --release --features postgres,oracle
 
           SRC="target/release/rs_database_connect.dll"
           test -f "$SRC"
@@ -192,17 +193,18 @@ jobs:
           rs_database_connect ${VER}
           Platform: windows ${ARCH}
           PHP: ${PHP_VER} ${TS}
-          Features: postgres
+          Drivers: PostgreSQL + Oracle (Instant Client required at runtime for OCI)
 
           1. Copy rs_database_connect.dll into the PHP extension_dir
              (see php --ini / extension_dir)
           2. In php.ini add: extension=rs_database_connect
-          3. Restart PHP / IIS / php-cgi
-          4. php -m | findstr rs_database_connect
+          3. For Oracle: install Instant Client and add it to PATH
+          4. Restart PHP / IIS / php-cgi
+          5. php -m | findstr rs_database_connect
           EOF
           python -c "from pathlib import Path; p=Path(r'dist/rs_database_connect/INSTALL.txt'); p.write_text('\n'.join(l.lstrip() for l in p.read_text().splitlines())+'\n')"
 
-          ARCHIVE="rs_database_connect-${VER}-windows-${ARCH}-php${PHP_VER}-${TS}-postgres.zip"
+          ARCHIVE="rs_database_connect-${VER}-windows-${ARCH}-php${PHP_VER}-${TS}.zip"
           (
             cd dist
             7z a -tzip "../${ARCHIVE}" rs_database_connect
@@ -244,19 +246,19 @@ jobs:
           body: |
             ## rs_database_connect `${{ github.ref_name }}`
 
-            Prebuilt **NTS** and **ZTS** binaries (**PostgreSQL**).
+            Prebuilt **NTS** / **ZTS** binaries with **PostgreSQL + Oracle** drivers.
 
             | Platform | Archive |
             | --- | --- |
-            | Linux | `*-linux-*-phpX.Y-{nts\|zts}-postgres.tar.gz` |
-            | macOS | `*-macos-*-phpX.Y-{nts\|zts}-postgres.tar.gz` |
-            | Windows | `*-windows-x86_64-phpX.Y-{nts\|zts}-postgres.zip` |
+            | Linux | `*-linux-*-phpX.Y-{nts\|zts}.tar.gz` |
+            | macOS | `*-macos-*-phpX.Y-{nts\|zts}.tar.gz` |
+            | Windows | `*-windows-x86_64-phpX.Y-{nts\|zts}.zip` |
 
             Match **PHP version**, **architecture**, and **NTS/ZTS** to your runtime (`php -i | grep Thread`).
 
-            Each package contains the extension binary (`.so` / `.dylib` / `.dll`), ini snippet, stub, and `INSTALL.txt`.
+            Oracle connections need **Oracle Instant Client** on the machine at runtime (LD_LIBRARY_PATH / PATH).
 
-            Oracle builds are not in this matrix yet.
+            Each package: extension binary (`.so` / `.dylib` / `.dll`), ini snippet, stub, `INSTALL.txt`.
           files: |
             artifacts/rs_database_connect-*.tar.gz
             artifacts/rs_database_connect-*.tar.gz.sha256

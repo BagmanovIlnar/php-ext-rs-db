@@ -29,14 +29,14 @@ Design plan: [`RS_DATABASE_CONNECT_PLAN_RUST_HEARTBEAT.md`](RS_DATABASE_CONNECT_
 | PHP | 8.2–8.5 **NTS** and **ZTS** (separate binaries; match `php -i` Thread Safety) |
 | Rust | 1.75+ (CI uses stable) |
 | OpenSSL | For PostgreSQL TLS (`postgres-openssl`) |
-| Oracle Instant Client | Only when building with `--features oracle` |
+| Oracle Instant Client | Runtime dependency for OCI DSN (`oci8://…`); not required to *load* the extension |
 
 ## Prebuilt releases
 
-GitHub Releases (`v*`) attach archives:
+GitHub Releases (`v*`) attach archives (both drivers included):
 
-- Linux/macOS: `rs_database_connect-<ver>-<os>-<arch>-php<x.y>-{nts|zts}-postgres.tar.gz`
-- Windows: `rs_database_connect-<ver>-windows-x86_64-php<x.y>-{nts|zts}-postgres.zip`
+- Linux/macOS: `rs_database_connect-<ver>-<os>-<arch>-php<x.y>-{nts|zts}.tar.gz`
+- Windows: `rs_database_connect-<ver>-windows-x86_64-php<x.y>-{nts|zts}.zip`
 
 Inside: `rs_database_connect.so` / `.dylib` / `.dll`, ini snippet, stub, `INSTALL.txt`.
 
@@ -44,8 +44,9 @@ Inside: `rs_database_connect.so` / `.dylib` / `.dll`, ini snippet, stub, `INSTAL
 
 ```bash
 export PHP_CONFIG="$(which php-config)"   # must match target PHP
-cargo build --release --features postgres
-# PostgreSQL + Oracle (ODPI-C linked via `oracle` crate; Instant Client needed at runtime):
+# default features = postgres + oracle
+cargo build --release
+# or explicit:
 cargo build --release --features postgres,oracle
 ```
 
@@ -73,7 +74,7 @@ rs_database_connect.stmt_cache_size=20
 
 **SAPI:** NTS (PHP-FPM) and ZTS (e.g. Apache worker). Use the matching archive; NTS/ZTS binaries are not interchangeable. On ZTS, exhausted pools wait up to `pool_wait_timeout_ms` (FIFO).
 
-**Runtime:** OpenSSL for PostgreSQL TLS; Oracle Instant Client when built with `--features oracle`.
+**Runtime:** OpenSSL for PostgreSQL TLS; Oracle Instant Client on `PATH` / `LD_LIBRARY_PATH` for OCI.
 
 ## DSN
 
@@ -106,7 +107,7 @@ IDE stubs: [`stubs/rs_database_connect.stub.php`](stubs/rs_database_connect.stub
 ## Tests
 
 ```bash
-cargo test --lib --features postgres
+cargo test --lib --features postgres,oracle
 # PHPT (requires built extension + DSN env):
 # RSDB_DSN='pg://…' RSDB_EXT=/path/to/librs_database_connect.so php run-tests.php tests/phpt
 ```

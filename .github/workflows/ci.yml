@@ -29,7 +29,7 @@ jobs:
           export PHP_CONFIG="$(command -v php-config)"
           echo "PHP_CONFIG=$PHP_CONFIG"
           "$PHP_CONFIG" --version
-          cargo test --lib --features postgres
+          cargo test --lib --features postgres,oracle
 
   rust-unit-oracle-compile:
     name: Compile with oracle feature
@@ -121,7 +121,7 @@ jobs:
             export RUSTUP_TOOLCHAIN=nightly
             export RUSTFLAGS="-C linker=rust-lld"
             where php
-            cargo +nightly build --release --features postgres
+            cargo +nightly build --release --features postgres,oracle
             EXT="target/release/rs_database_connect.dll"
             # php.exe needs a Windows path, not /d/a/...
             DIR="$(pwd -W)"
@@ -129,7 +129,7 @@ jobs:
             export PHP_CONFIG="$(command -v php-config)"
             echo "PHP_CONFIG=$PHP_CONFIG"
             "$PHP_CONFIG" --version
-            cargo build --release --features postgres
+            cargo build --release --features postgres,oracle
             case "$(uname -s)" in
               Linux)  EXT="target/release/librs_database_connect.so" ;;
               Darwin) EXT="target/release/librs_database_connect.dylib" ;;
@@ -174,5 +174,5 @@ jobs:
           sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
           export PHP_CONFIG="$(command -v php-config)"
           echo "PHP_CONFIG=$PHP_CONFIG"
-          cargo build --features postgres
+          cargo build --features postgres,oracle
           php -d extension="$PWD/target/debug/librs_database_connect.so" tests/smoke_pg.php

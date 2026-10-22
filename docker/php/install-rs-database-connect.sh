@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PHP_CONFIG="${PHP_CONFIG:-php-config}"
-FEATURES="${RSDB_FEATURES:-postgres}"
+FEATURES="${RSDB_FEATURES:-postgres,oracle}"
 PROFILE="${RSDB_PROFILE:-release}"
 
 if ! command -v "$PHP_CONFIG" >/dev/null 2>&1; then
