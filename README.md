@@ -35,9 +35,10 @@ Design plan: [`RS_DATABASE_CONNECT_PLAN_RUST_HEARTBEAT.md`](RS_DATABASE_CONNECT_
 
 GitHub Releases (`v*`) attach archives:
 
-`rs_database_connect-<ver>-<os>-<arch>-php<x.y>-nts-postgres.tar.gz`
+- Linux/macOS: `rs_database_connect-<ver>-<os>-<arch>-php<x.y>-nts-postgres.tar.gz`
+- Windows: `rs_database_connect-<ver>-windows-x86_64-php<x.y>-nts-postgres.zip`
 
-Inside: `rs_database_connect.so` / `.dylib`, `.ini`, stub, `INSTALL.txt`.
+Inside: `rs_database_connect.so` / `.dylib` / `.dll`, ini snippet, stub, `INSTALL.txt`.
 
 ## Build
 
