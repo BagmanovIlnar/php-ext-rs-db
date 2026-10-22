@@ -26,7 +26,7 @@ Design plan: [`RS_DATABASE_CONNECT_PLAN_RUST_HEARTBEAT.md`](RS_DATABASE_CONNECT_
 
 | Component | Notes |
 | --- | --- |
-| PHP | 8.2–8.5 NTS (ZTS = separate build) |
+| PHP | 8.2–8.5 **NTS** and **ZTS** (separate binaries; match `php -i` Thread Safety) |
 | Rust | 1.75+ (CI uses stable) |
 | OpenSSL | For PostgreSQL TLS (`postgres-openssl`) |
 | Oracle Instant Client | Only when building with `--features oracle` |
@@ -35,8 +35,8 @@ Design plan: [`RS_DATABASE_CONNECT_PLAN_RUST_HEARTBEAT.md`](RS_DATABASE_CONNECT_
 
 GitHub Releases (`v*`) attach archives:
 
-- Linux/macOS: `rs_database_connect-<ver>-<os>-<arch>-php<x.y>-nts-postgres.tar.gz`
-- Windows: `rs_database_connect-<ver>-windows-x86_64-php<x.y>-nts-postgres.zip`
+- Linux/macOS: `rs_database_connect-<ver>-<os>-<arch>-php<x.y>-{nts|zts}-postgres.tar.gz`
+- Windows: `rs_database_connect-<ver>-windows-x86_64-php<x.y>-{nts|zts}-postgres.zip`
 
 Inside: `rs_database_connect.so` / `.dylib` / `.dll`, ini snippet, stub, `INSTALL.txt`.
 
@@ -71,7 +71,7 @@ rs_database_connect.lob_max_bytes=16777216
 rs_database_connect.stmt_cache_size=20
 ```
 
-**SAPI:** first release supports **NTS only** (typical PHP-FPM). ZTS builds refuse to load.
+**SAPI:** NTS (PHP-FPM) and ZTS (e.g. Apache worker). Use the matching archive; NTS/ZTS binaries are not interchangeable. On ZTS, exhausted pools wait up to `pool_wait_timeout_ms` (FIFO).
 
 **Runtime:** OpenSSL for PostgreSQL TLS; Oracle Instant Client when built with `--features oracle`.
 

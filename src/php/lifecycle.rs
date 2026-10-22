@@ -99,13 +99,6 @@ pub fn load_config() -> Result<(), String> {
 /// ```
 pub fn minit(_ty: i32, module_number: i32) -> i32 {
     let result = catch_unwind(|| {
-        // First production release is NTS-only (ZTS FIFO pool is a later minor).
-        if cfg!(php_zts) {
-            return Err(
-                "rs_database_connect: ZTS builds are not supported in this release; use NTS PHP"
-                    .into(),
-            );
-        }
         crate::php::exception::register_classes()?;
         register_ini(module_number);
         load_config()
@@ -145,6 +138,10 @@ pub extern "C" fn mshutdown(_ty: i32, _module_number: i32) -> i32 {
 pub extern "C" fn minfo(_module: *mut ext_php_rs::zend::ModuleEntry) {
     ext_php_rs::info_table_start!();
     ext_php_rs::info_table_row!("rs_database_connect", "enabled");
+    ext_php_rs::info_table_row!(
+        "Thread safety",
+        if cfg!(php_zts) { "ZTS" } else { "NTS" }
+    );
     ext_php_rs::info_table_row!(
         "PostgreSQL driver",
         if cfg!(feature = "postgres") { "yes" } else { "no" }

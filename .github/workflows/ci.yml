@@ -52,7 +52,7 @@ jobs:
           cargo build --features postgres,oracle
 
   php-matrix:
-    name: Build PHP ${{ matrix.php }}
+    name: Build PHP ${{ matrix.php }} NTS
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -66,6 +66,8 @@ jobs:
           php-version: ${{ matrix.php }}
           tools: none
           coverage: none
+        env:
+          phpts: nts
       - name: Build extension
         run: |
           sudo apt-get update
@@ -76,6 +78,30 @@ jobs:
           cargo build --release --features postgres
           php -d extension="$PWD/target/release/librs_database_connect.so" -r \
             'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") && ini_get("rs_database_connect.lob_max_bytes") !== false ? 0 : 1);'
+
+  php-zts-smoke:
+    name: Build PHP 8.3 ZTS smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          tools: none
+          coverage: none
+        env:
+          phpts: zts
+      - name: Build and load ZTS extension
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config clang libclang-dev
+          export PHP_CONFIG="$(command -v php-config)"
+          echo "PHP_CONFIG=$PHP_CONFIG"
+          php -i | grep -i 'Thread Safety'
+          cargo build --release --features postgres
+          php -d extension="$PWD/target/release/librs_database_connect.so" -r \
+            'exit(extension_loaded("rs_database_connect") && class_exists("RsDataBaseConnect") ? 0 : 1);'
 
   integration-pg:
     name: PostgreSQL integration

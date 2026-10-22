@@ -13,13 +13,14 @@ env:
 
 jobs:
   build-unix:
-    name: ${{ matrix.os }} PHP ${{ matrix.php }}
+    name: ${{ matrix.os }} PHP ${{ matrix.php }} ${{ matrix.ts }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-14]
         php: ["8.2", "8.3", "8.4", "8.5"]
+        ts: [nts, zts]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -28,6 +29,8 @@ jobs:
           php-version: ${{ matrix.php }}
           tools: none
           coverage: none
+        env:
+          phpts: ${{ matrix.ts }}
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
@@ -47,6 +50,7 @@ jobs:
           set -euo pipefail
           export PHP_CONFIG="$(command -v php-config)"
           "$PHP_CONFIG" --version
+          php -i | grep -i 'Thread Safety' || true
           cargo build --release --features postgres
 
           case "${{ matrix.os }}" in
@@ -55,6 +59,7 @@ jobs:
           esac
           ARCH="$(uname -m)"
           PHP_VER="${{ matrix.php }}"
+          TS="${{ matrix.ts }}"
           VER="${GITHUB_REF_NAME#v}"
 
           case "$(uname -s)" in
@@ -73,6 +78,7 @@ jobs:
             'extension=rs_database_connect' \
             'zend.exception_ignore_args=On' \
             'rs_database_connect.max_connections_per_process=2' \
+            'rs_database_connect.pool_wait_timeout_ms=30000' \
             'rs_database_connect.idle_validate_ms=60000' \
             'rs_database_connect.session_reset=1' \
             'rs_database_connect.lob_max_bytes=16777216' \
@@ -81,7 +87,7 @@ jobs:
           cat > "$STAGE/INSTALL.txt" <<EOF
           rs_database_connect ${VER}
           Platform: ${OS_ID} ${ARCH}
-          PHP: ${PHP_VER} NTS
+          PHP: ${PHP_VER} ${TS}
           Features: postgres
 
           1. Copy rs_database_connect.${EXT} into \$(php-config --extension-dir)
@@ -90,24 +96,25 @@ jobs:
           EOF
           python3 -c "from pathlib import Path; p=Path('dist/rs_database_connect/INSTALL.txt'); p.write_text('\n'.join(l.lstrip() for l in p.read_text().splitlines())+'\n')"
 
-          ARCHIVE="rs_database_connect-${VER}-${OS_ID}-${ARCH}-php${PHP_VER}-nts-postgres.tar.gz"
+          ARCHIVE="rs_database_connect-${VER}-${OS_ID}-${ARCH}-php${PHP_VER}-${TS}-postgres.tar.gz"
           tar -C dist -czf "$ARCHIVE" rs_database_connect
           shasum -a 256 "$ARCHIVE" | tee "${ARCHIVE}.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rsdb-${{ matrix.os }}-php${{ matrix.php }}
+          name: rsdb-${{ matrix.os }}-php${{ matrix.php }}-${{ matrix.ts }}
           path: |
             rs_database_connect-*.tar.gz
             rs_database_connect-*.tar.gz.sha256
 
   build-windows:
-    name: windows PHP ${{ matrix.php }}
+    name: windows PHP ${{ matrix.php }} ${{ matrix.ts }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
         php: ["8.2", "8.3", "8.4", "8.5"]
+        ts: [nts, zts]
     steps:
       - uses: actions/checkout@v4
 
@@ -122,7 +129,7 @@ jobs:
           tools: none
           coverage: none
         env:
-          phpts: nts
+          phpts: ${{ matrix.ts }}
 
       - name: Install OpenSSL (vcpkg)
         shell: bash
@@ -147,6 +154,7 @@ jobs:
           export PHP_CONFIG="$(command -v php-config)"
           echo "PHP_CONFIG=$PHP_CONFIG"
           "$PHP_CONFIG" --version
+          php -i | grep -i 'Thread Safety' || true
           # rust-lld is configured in .cargo/config.toml for windows-msvc
           cargo +nightly build --release --features postgres
 
@@ -157,17 +165,18 @@ jobs:
 
           VER="${GITHUB_REF_NAME#v}"
           PHP_VER="${{ matrix.php }}"
+          TS="${{ matrix.ts }}"
           ARCH="x86_64"
           STAGE="dist/rs_database_connect"
           rm -rf dist && mkdir -p "$STAGE"
           cp "$SRC" "$STAGE/php_rs_database_connect.dll"
-          # Also ship plain name for extension=rs_database_connect
           cp "$SRC" "$STAGE/rs_database_connect.dll"
           cp stubs/rs_database_connect.stub.php "$STAGE/"
           printf '%s\n' \
             'extension=rs_database_connect' \
             'zend.exception_ignore_args=On' \
             'rs_database_connect.max_connections_per_process=2' \
+            'rs_database_connect.pool_wait_timeout_ms=30000' \
             'rs_database_connect.idle_validate_ms=60000' \
             'rs_database_connect.session_reset=1' \
             'rs_database_connect.lob_max_bytes=16777216' \
@@ -176,7 +185,7 @@ jobs:
           cat > "$STAGE/INSTALL.txt" <<EOF
           rs_database_connect ${VER}
           Platform: windows ${ARCH}
-          PHP: ${PHP_VER} NTS
+          PHP: ${PHP_VER} ${TS}
           Features: postgres
 
           1. Copy rs_database_connect.dll into the PHP extension_dir
@@ -187,7 +196,7 @@ jobs:
           EOF
           python -c "from pathlib import Path; p=Path(r'dist/rs_database_connect/INSTALL.txt'); p.write_text('\n'.join(l.lstrip() for l in p.read_text().splitlines())+'\n')"
 
-          ARCHIVE="rs_database_connect-${VER}-windows-${ARCH}-php${PHP_VER}-nts-postgres.zip"
+          ARCHIVE="rs_database_connect-${VER}-windows-${ARCH}-php${PHP_VER}-${TS}-postgres.zip"
           (
             cd dist
             7z a -tzip "../${ARCHIVE}" rs_database_connect
@@ -197,7 +206,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rsdb-windows-php${{ matrix.php }}
+          name: rsdb-windows-php${{ matrix.php }}-${{ matrix.ts }}
           path: |
             rs_database_connect-*.zip
             rs_database_connect-*.zip.sha256
@@ -229,13 +238,15 @@ jobs:
           body: |
             ## rs_database_connect `${{ github.ref_name }}`
 
-            Prebuilt **NTS** binaries (**PostgreSQL**).
+            Prebuilt **NTS** and **ZTS** binaries (**PostgreSQL**).
 
             | Platform | Archive |
             | --- | --- |
-            | Linux | `*-linux-*-phpX.Y-nts-postgres.tar.gz` |
-            | macOS | `*-macos-*-phpX.Y-nts-postgres.tar.gz` |
-            | Windows | `*-windows-x86_64-phpX.Y-nts-postgres.zip` |
+            | Linux | `*-linux-*-phpX.Y-{nts\|zts}-postgres.tar.gz` |
+            | macOS | `*-macos-*-phpX.Y-{nts\|zts}-postgres.tar.gz` |
+            | Windows | `*-windows-x86_64-phpX.Y-{nts\|zts}-postgres.zip` |
+
+            Match **PHP version**, **architecture**, and **NTS/ZTS** to your runtime (`php -i | grep Thread`).
 
             Each package contains the extension binary (`.so` / `.dylib` / `.dll`), ini snippet, stub, and `INSTALL.txt`.
 

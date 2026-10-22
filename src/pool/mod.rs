@@ -1,4 +1,9 @@
 //! Process-local connection pool and lease registry.
+//!
+//! Persistent leases are shared across the PHP process. On **NTS**, an exhausted
+//! pool returns [`Error::PoolExhausted`] immediately. On **ZTS**, waiters join a
+//! per-DSN FIFO queue and block until a slot is freed or
+//! `pool_wait_timeout_ms` elapses ([`Error::PoolTimeout`]).
 
 pub mod slot;
 
@@ -8,8 +13,9 @@ use crate::driver::DatabaseConnection;
 use crate::error::Error;
 use crate::pool::slot::{ConnectionSlot, SlotStatus};
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
-use std::collections::HashMap;
+use parking_lot::{Condvar, Mutex};
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 /// Handle identifying one leased connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +41,31 @@ pub struct ConnectionSnapshot {
 struct DsnPool {
     slots: Vec<ConnectionSlot>,
     next_slot_id: u64,
+    /// FIFO of waiter ids (ZTS). Empty on NTS in practice.
+    waiters: VecDeque<u64>,
+    next_waiter_id: u64,
+}
+
+impl DsnPool {
+    fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            next_slot_id: 1,
+            waiters: VecDeque::new(),
+            next_waiter_id: 1,
+        }
+    }
+
+    fn active_count(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|s| s.status != SlotStatus::Broken)
+            .count()
+    }
+
+    fn remove_waiter(&mut self, waiter_id: u64) {
+        self.waiters.retain(|&id| id != waiter_id);
+    }
 }
 
 struct RegistryInner {
@@ -93,16 +124,34 @@ impl RegistryInner {
     }
 }
 
-static REGISTRY: Lazy<Mutex<RegistryInner>> = Lazy::new(|| Mutex::new(RegistryInner::new()));
+static REGISTRY: Lazy<(Mutex<RegistryInner>, Condvar)> =
+    Lazy::new(|| (Mutex::new(RegistryInner::new()), Condvar::new()));
 
 fn with_registry<F, R>(f: F) -> R
 where
     F: FnOnce(&mut RegistryInner) -> R,
 {
-    let mut guard = REGISTRY.lock();
+    let (lock, _) = &*REGISTRY;
+    let mut guard = lock.lock();
     guard.ensure_pid();
     guard.apply_persistent_timeouts();
     f(&mut guard)
+}
+
+fn notify_one_waiter() {
+    let (_, cvar) = &*REGISTRY;
+    cvar.notify_one();
+}
+
+/// True when this caller may take or create a persistent slot.
+///
+/// If the FIFO is empty, anyone may acquire. If waiters exist, only the head
+/// waiter (matched by `my_waiter`) may proceed.
+fn may_acquire(pool: &DsnPool, my_waiter: Option<u64>) -> bool {
+    match pool.waiters.front() {
+        None => true,
+        Some(&head) => my_waiter == Some(head),
+    }
 }
 
 /// Acquire a lease for the given DSN string.
@@ -110,13 +159,14 @@ pub fn acquire(dsn_str: &str, persistent: bool) -> Result<LeaseHandle, Error> {
     let dsn = Dsn::parse(dsn_str)?;
     let canonical_key = dsn.canonical_key();
     let masked = dsn.masked_address();
-    let driver = dsn.driver_kind();
 
     if !persistent {
+        let driver = dsn.driver_kind();
         let conn = DatabaseConnection::connect(&dsn)?;
         return with_registry(|reg| {
             let id = reg.alloc_id();
-            let mut slot = ConnectionSlot::new_reserved(id, false, masked.clone(), canonical_key.clone());
+            let mut slot =
+                ConnectionSlot::new_reserved(id, false, masked.clone(), canonical_key.clone());
             slot.connection = Some(conn);
             slot.stored_dsn = Some(dsn);
             slot.touch_busy();
@@ -133,14 +183,124 @@ pub fn acquire(dsn_str: &str, persistent: bool) -> Result<LeaseHandle, Error> {
         });
     }
 
-    if let Some(handle) = try_take_free_persistent(&canonical_key)? {
+    if cfg!(php_zts) {
+        acquire_persistent_zts(dsn, canonical_key, masked)
+    } else {
+        acquire_persistent_nts(dsn, canonical_key, masked)
+    }
+}
+
+fn acquire_persistent_nts(
+    dsn: Dsn,
+    canonical_key: String,
+    masked: String,
+) -> Result<LeaseHandle, Error> {
+    if let Some(handle) = try_take_free_persistent(&canonical_key, None)? {
         return Ok(handle);
     }
+    let (key, idx) = reserve_persistent_slot(&canonical_key, &masked, &dsn, None)?;
+    finish_new_persistent(&dsn, &key, idx)
+}
 
-    let (key, idx) = reserve_persistent_slot(&canonical_key, &masked, &dsn)?;
-    let connect_result = DatabaseConnection::connect(&dsn);
+fn acquire_persistent_zts(
+    dsn: Dsn,
+    canonical_key: String,
+    masked: String,
+) -> Result<LeaseHandle, Error> {
+    let timeout_ms = GlobalConfig::get().pool_wait_timeout_ms;
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut my_waiter: Option<u64> = None;
+
+    loop {
+        match try_take_free_persistent(&canonical_key, my_waiter) {
+            Ok(Some(handle)) => {
+                finish_waiter(&canonical_key, my_waiter);
+                return Ok(handle);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                finish_waiter(&canonical_key, my_waiter);
+                return Err(e);
+            }
+        }
+
+        match reserve_persistent_slot(&canonical_key, &masked, &dsn, my_waiter) {
+            Ok((key, idx)) => {
+                let result = finish_new_persistent(&dsn, &key, idx);
+                finish_waiter(&canonical_key, my_waiter);
+                return result;
+            }
+            Err(Error::PoolExhausted) => {}
+            Err(e) => {
+                finish_waiter(&canonical_key, my_waiter);
+                return Err(e);
+            }
+        }
+
+        let (lock, cvar) = &*REGISTRY;
+        let mut guard = lock.lock();
+        guard.ensure_pid();
+        guard.apply_persistent_timeouts();
+
+        let pool = guard
+            .pools
+            .entry(canonical_key.clone())
+            .or_insert_with(DsnPool::new);
+
+        let wid = match my_waiter {
+            Some(id) => id,
+            None => {
+                let id = pool.next_waiter_id;
+                pool.next_waiter_id = pool.next_waiter_id.saturating_add(1);
+                pool.waiters.push_back(id);
+                my_waiter = Some(id);
+                id
+            }
+        };
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            pool.remove_waiter(wid);
+            return Err(Error::PoolTimeout);
+        }
+
+        // Head of FIFO and a free / creatable slot: drop lock and retry.
+        if pool.waiters.front() == Some(&wid) {
+            let max = GlobalConfig::get().max_connections_per_process;
+            let can_progress = pool.slots.iter().any(|s| s.status == SlotStatus::Free)
+                || pool.active_count() < max;
+            if can_progress {
+                drop(guard);
+                continue;
+            }
+        }
+
+        let timed_out = cvar.wait_for(&mut guard, remaining).timed_out();
+        if timed_out {
+            if let Some(pool) = guard.pools.get_mut(&canonical_key) {
+                pool.remove_waiter(wid);
+            }
+            return Err(Error::PoolTimeout);
+        }
+    }
+}
+
+fn finish_waiter(canonical_key: &str, my_waiter: Option<u64>) {
+    let Some(wid) = my_waiter else {
+        return;
+    };
     with_registry(|reg| {
-        let pool = reg.pools.get_mut(&key).expect("pool");
+        if let Some(pool) = reg.pools.get_mut(canonical_key) {
+            pool.remove_waiter(wid);
+        }
+    });
+    notify_one_waiter();
+}
+
+fn finish_new_persistent(dsn: &Dsn, key: &str, idx: usize) -> Result<LeaseHandle, Error> {
+    let connect_result = DatabaseConnection::connect(dsn);
+    with_registry(|reg| {
+        let pool = reg.pools.get_mut(key).expect("pool");
         let slot = &mut pool.slots[idx];
         match connect_result {
             Ok(conn) => {
@@ -155,14 +315,20 @@ pub fn acquire(dsn_str: &str, persistent: bool) -> Result<LeaseHandle, Error> {
         }
         Ok(())
     })?;
-    activate_persistent_slot(&key, idx)
+    activate_persistent_slot(key, idx)
 }
 
-fn try_take_free_persistent(canonical_key: &str) -> Result<Option<LeaseHandle>, Error> {
+fn try_take_free_persistent(
+    canonical_key: &str,
+    my_waiter: Option<u64>,
+) -> Result<Option<LeaseHandle>, Error> {
     with_registry(|reg| {
         let Some(pool) = reg.pools.get(canonical_key) else {
             return Ok(None);
         };
+        if !may_acquire(pool, my_waiter) {
+            return Ok(None);
+        }
         let Some(idx) = pool
             .slots
             .iter()
@@ -170,7 +336,11 @@ fn try_take_free_persistent(canonical_key: &str) -> Result<Option<LeaseHandle>, 
         else {
             return Ok(None);
         };
-        Ok(Some(activate_persistent_slot_inner(reg, canonical_key, idx)?))
+        Ok(Some(activate_persistent_slot_inner(
+            reg,
+            canonical_key,
+            idx,
+        )?))
     })
 }
 
@@ -178,19 +348,20 @@ fn reserve_persistent_slot(
     canonical_key: &str,
     masked: &str,
     dsn: &Dsn,
+    my_waiter: Option<u64>,
 ) -> Result<(String, usize), Error> {
     with_registry(|reg| {
         let cfg = GlobalConfig::get();
-        let pool = reg.pools.entry(canonical_key.to_string()).or_insert(DsnPool {
-            slots: Vec::new(),
-            next_slot_id: 1,
-        });
+        let pool = reg
+            .pools
+            .entry(canonical_key.to_string())
+            .or_insert_with(DsnPool::new);
 
-        let active = pool
-            .slots
-            .iter()
-            .filter(|s| s.status != SlotStatus::Broken)
-            .count();
+        if !may_acquire(pool, my_waiter) {
+            return Err(Error::PoolExhausted);
+        }
+
+        let active = pool.active_count();
         if active >= cfg.max_connections_per_process {
             return Err(Error::PoolExhausted);
         }
@@ -272,11 +443,11 @@ fn activate_persistent_slot_inner(
 
 /// Return a lease to the pool (or close non-persistent connection).
 pub fn release(lease: LeaseHandle, broken: bool) -> Result<(), Error> {
-    with_registry(|reg| {
+    let notified = with_registry(|reg| {
         if !lease.persistent {
             if let Some(mut slot) = reg.detached.remove(&lease.slot_id) {
                 if slot.lease_generation != lease.generation {
-                    return Ok(());
+                    return false;
                 }
                 if broken {
                     slot.mark_broken();
@@ -288,37 +459,41 @@ pub fn release(lease: LeaseHandle, broken: bool) -> Result<(), Error> {
                     c.close();
                 }
             }
-            return Ok(());
+            return false;
         }
 
         for pool in reg.pools.values_mut() {
             if let Some(slot) = pool.slots.iter_mut().find(|s| s.id == lease.slot_id) {
                 if slot.lease_generation != lease.generation {
-                    return Ok(());
+                    return false;
                 }
                 if broken {
                     close_slot(slot);
-                    return Ok(());
+                    return true;
                 }
                 let cfg = GlobalConfig::get();
                 if let Some(c) = slot.connection.as_mut() {
                     if c.rollback().is_err() {
                         close_slot(slot);
-                        return Ok(());
+                        return true;
                     }
                     if cfg.session_reset != SessionResetMode::Off {
                         if c.discard_session(cfg.session_reset).is_err() {
                             close_slot(slot);
-                            return Ok(());
+                            return true;
                         }
                     }
                 }
                 slot.mark_free();
-                return Ok(());
+                return true;
             }
         }
-        Ok(())
-    })
+        false
+    });
+    if notified {
+        notify_one_waiter();
+    }
+    Ok(())
 }
 
 fn close_slot(slot: &mut ConnectionSlot) {
@@ -417,12 +592,14 @@ pub fn shutdown_all() {
             for slot in &mut pool.slots {
                 close_slot(slot);
             }
+            pool.waiters.clear();
         }
         reg.pools.clear();
         for (_, mut slot) in reg.detached.drain() {
             close_slot(&mut slot);
         }
     });
+    notify_one_waiter();
 }
 
 #[cfg(test)]
@@ -444,5 +621,16 @@ mod tests {
         let snaps = connection_snapshots();
         assert!(snaps.is_empty());
         GlobalConfig::set(crate::config::Config::default()).unwrap();
+    }
+
+    #[test]
+    fn may_acquire_fifo_head_only() {
+        let mut pool = DsnPool::new();
+        assert!(may_acquire(&pool, None));
+        pool.waiters.push_back(10);
+        pool.waiters.push_back(20);
+        assert!(!may_acquire(&pool, None));
+        assert!(may_acquire(&pool, Some(10)));
+        assert!(!may_acquire(&pool, Some(20)));
     }
 }
