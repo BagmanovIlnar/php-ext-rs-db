@@ -77,6 +77,9 @@ impl ExecuteOutcome {
 }
 
 /// Active physical connection (driver-specific).
+///
+/// A thin driver switch; the variant size difference is fine (no collections of it).
+#[allow(clippy::large_enum_variant)]
 pub enum DatabaseConnection {
     #[cfg(feature = "postgres")]
     Postgres(postgres::PgConnection),
@@ -243,15 +246,6 @@ impl DatabaseConnection {
             DatabaseConnection::Postgres(c) => c.close(),
             #[cfg(feature = "oracle")]
             DatabaseConnection::Oracle(c) => c.close(),
-        }
-    }
-
-    pub fn apply_call_timeout(&mut self, timeout_ms: u64) -> Result<(), Error> {
-        match self {
-            #[cfg(feature = "postgres")]
-            DatabaseConnection::Postgres(c) => c.apply_call_timeout(timeout_ms),
-            #[cfg(feature = "oracle")]
-            DatabaseConnection::Oracle(c) => c.apply_call_timeout(timeout_ms),
         }
     }
 

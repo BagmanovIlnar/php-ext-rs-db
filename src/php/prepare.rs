@@ -75,6 +75,8 @@ struct Resolved {
     type_name: String,
     tdo: Option<String>,
     by_ref: bool,
+    /// Declared OUT buffer size (`-1` = unspecified).
+    size: i64,
     state: Rc<RefCell<BindState>>,
 }
 
@@ -98,6 +100,7 @@ impl Resolved {
             self.tdo.clone(),
             self.by_ref,
         )
+        .with_size(self.size)
     }
 }
 
@@ -304,12 +307,14 @@ impl RsDataBasePrepare {
                 }
             };
             let type_name = declared.unwrap_or_else(|| value.inferred_type_name().to_string());
+            let size = st.size;
             out.push(Resolved {
                 name: name.clone(),
                 value,
                 type_name,
                 tdo,
                 by_ref: st.by_ref,
+                size,
                 state: entry.state.clone(),
             });
         }

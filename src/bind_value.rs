@@ -78,6 +78,9 @@ pub struct BindSpec {
     pub type_name: String,
     pub tdo: Option<String>,
     pub is_out: bool,
+    /// Declared buffer size for OUT binds (`-1` = unspecified); used by the
+    /// Oracle driver to size OUT VARCHAR2 variables.
+    pub size: i64,
 }
 
 impl BindSpec {
@@ -94,7 +97,15 @@ impl BindSpec {
             type_name: type_name.into(),
             tdo,
             is_out,
+            size: -1,
         }
+    }
+
+    /// Set the declared OUT buffer size (from `RsDataBasePrepare::bind()` /
+    /// `RsDataBaseBind::setSize()`).
+    pub fn with_size(mut self, size: i64) -> Self {
+        self.size = size;
+        self
     }
 
     /// Enforce `lob_max_bytes` for CLOB/BLOB/string/bytes payloads.
@@ -130,7 +141,7 @@ pub fn map_tdo_to_pg(tdo: &str) -> Result<PgCollectionKind, Error> {
     match tdo.trim().to_ascii_uppercase().as_str() {
         "D_CL_ID" => Ok(PgCollectionKind::Bigint),
         "D_CL_STR" => Ok(PgCollectionKind::Text),
-        other if other.is_empty() => Err(Error::Bind(
+        "" => Err(Error::Bind(
             "COLLECTION bind requires setTdo() (e.g. D_CL_ID, D_CL_STR)".into(),
         )),
         other => Err(Error::Bind(format!(
