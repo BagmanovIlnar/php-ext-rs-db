@@ -191,6 +191,10 @@ pub fn note_failure(state: &StateRef, e: Error) -> Error {
     s.set_error(&e);
     if lost {
         s.broken = true;
+        // The socket is gone: any server-side transaction was rolled back by
+        // the server itself, so the implicit-transaction flag must not block
+        // recovery (transparent replacement / execute(reconnect)).
+        s.physical_tx_active = false;
         return match e {
             Error::Connection(_) => e,
             other => Error::Connection(error_message(&other)),
@@ -469,8 +473,12 @@ impl RsDataBaseConnect {
             if let Some((zval, state)) = request::lookup(&key) {
                 let (replace, differs) = {
                     let s = state.borrow();
+                    // A broken lease is replaced when no *explicit* transaction is
+                    // open (tx_level == 0). `physical_tx_active` is irrelevant for
+                    // a broken connection — the server rolled everything back
+                    // when the connection died.
                     (
-                        s.closed || (s.broken && s.tx_level == 0 && !s.physical_tx_active),
+                        s.closed || (s.broken && s.tx_level == 0),
                         s.persistent != persistent,
                     )
                 };
@@ -662,8 +670,8 @@ impl RsDataBaseConnect {
     /// ```php
     /// $q = $db->prepare('SELECT id FROM t WHERE name = :name');
     /// ```
-    pub fn prepare<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseConnect>,
+    pub fn prepare(
+        self_: &mut ZendClassObject<RsDataBaseConnect>,
         sql: String,
     ) -> PhpResult<ext_php_rs::boxed::ZBox<ZendClassObject<RsDataBasePrepare>>> {
         guard(|| {
@@ -682,9 +690,9 @@ impl RsDataBaseConnect {
     /// $db->beginTransaction();
     /// $db->beginTransaction(); // SAVEPOINT RSDB_<slot>_2
     /// ```
-    pub fn begin_transaction<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseConnect>,
-    ) -> PhpResult<&'a mut ZendClassObject<RsDataBaseConnect>> {
+    pub fn begin_transaction(
+        self_: &mut ZendClassObject<RsDataBaseConnect>,
+    ) -> PhpResult<&mut ZendClassObject<RsDataBaseConnect>> {
         guard(|| {
             begin_tx(&self_.state)?;
             Ok(())
@@ -698,7 +706,7 @@ impl RsDataBaseConnect {
     /// ```php
     /// $db->commit();
     /// ```
-    pub fn commit<'a>(self_: &'a mut ZendClassObject<RsDataBaseConnect>) -> PhpResult<&'a mut ZendClassObject<RsDataBaseConnect>> {
+    pub fn commit(self_: &mut ZendClassObject<RsDataBaseConnect>) -> PhpResult<&mut ZendClassObject<RsDataBaseConnect>> {
         guard(|| {
             commit_tx(&self_.state)?;
             Ok(())
@@ -711,7 +719,7 @@ impl RsDataBaseConnect {
     /// ```php
     /// $db->rollBack();
     /// ```
-    pub fn roll_back<'a>(self_: &'a mut ZendClassObject<RsDataBaseConnect>) -> PhpResult<&'a mut ZendClassObject<RsDataBaseConnect>> {
+    pub fn roll_back(self_: &mut ZendClassObject<RsDataBaseConnect>) -> PhpResult<&mut ZendClassObject<RsDataBaseConnect>> {
         guard(|| {
             rollback_tx(&self_.state)?;
             Ok(())

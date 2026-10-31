@@ -10,6 +10,9 @@ pub enum SlotStatus {
     Connecting,
     Busy,
     Free,
+    /// Lease release or idle validation in progress; the physical connection is
+    /// temporarily held outside the registry lock. Not visible to acquirers.
+    Validating,
     Broken,
 }
 
@@ -24,7 +27,6 @@ pub struct ConnectionSlot {
     pub connection: Option<DatabaseConnection>,
     pub masked_address: String,
     pub canonical_key: String,
-    pub owner_pid: u32,
     /// Parsed DSN (includes credentials) for idle reconnect; not exposed to PHP.
     pub stored_dsn: Option<Dsn>,
 }
@@ -47,7 +49,6 @@ impl ConnectionSlot {
             connection: None,
             masked_address,
             canonical_key,
-            owner_pid: std::process::id(),
             stored_dsn: None,
         }
     }
