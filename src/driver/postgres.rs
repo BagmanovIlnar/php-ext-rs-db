@@ -31,6 +31,10 @@ struct StmtCache {
     max: usize,
     order: VecDeque<String>,
     map: HashMap<String, Statement>,
+    /// Evictions since the last server-wide `DEALLOCATE ALL`. rust-postgres does
+    /// not expose statement names (and has no dealloc-on-drop), so leaked
+    /// server-side statements are reclaimed in batches.
+    evicted_since_reset: usize,
 }
 
 impl StmtCache {
@@ -39,6 +43,7 @@ impl StmtCache {
             max: max.max(1),
             order: VecDeque::new(),
             map: HashMap::new(),
+            evicted_since_reset: 0,
         }
     }
 
@@ -71,15 +76,27 @@ impl StmtCache {
         }
         while self.map.len() >= self.max {
             if let Some(old) = self.order.pop_front() {
-                // Dropping Statement closes/deallocates the server-side handle.
-                let _ = self.map.remove(&old);
-                let _ = client; // keep signature for future explicit DEALLOCATE
+                // Dropping a `Statement` does NOT deallocate it server-side
+                // (rust-postgres has no dealloc-on-drop and keeps the name
+                // private), so batch-reclaim periodically (see evicted_since_reset).
+                if self.map.remove(&old).is_some() {
+                    self.evicted_since_reset += 1;
+                }
             } else {
                 break;
             }
         }
         self.order.push_back(sql.clone());
         self.map.insert(sql, stmt);
+
+        // Bound server-side statement leakage: once as many statements have
+        // been evicted as the cache holds, deallocate everything and start
+        // fresh (the current statement is re-prepared on its next use).
+        if self.evicted_since_reset >= self.max {
+            let _ = client.batch_execute("DEALLOCATE ALL");
+            self.evicted_since_reset = 0;
+            self.clear();
+        }
     }
 }
 
@@ -279,9 +296,7 @@ impl PgConnection {
             Err(e) if allow_retry && is_stale_plan_error(&e) => {
                 self.stmt_cache.remove(sql);
                 // DEALLOCATE may already have been done by server; ignore.
-                let _ = self.client.batch_execute(&format!(
-                    "DEALLOCATE ALL"
-                ));
+                let _ = self.client.batch_execute("DEALLOCATE ALL");
                 self.stmt_cache.clear();
                 self.execute_cached(sql, binds, column_case, false)
             }
@@ -432,17 +447,6 @@ impl PgConnection {
 
     pub fn close(self) {
         drop(self.client);
-    }
-
-    pub fn apply_call_timeout(&mut self, timeout_ms: u64) -> Result<(), Error> {
-        if timeout_ms == 0 {
-            self.client
-                .batch_execute("RESET statement_timeout")
-                .map_err(map_driver_err)
-        } else {
-            let sql = format!("SET statement_timeout = {}", timeout_ms);
-            self.client.batch_execute(&sql).map_err(map_driver_err)
-        }
     }
 }
 
