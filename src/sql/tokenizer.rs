@@ -711,11 +711,10 @@ fn skip_oracle_q_quote(sql: &str, i: usize) -> Option<usize> {
     }
     let mut j = i + 3;
     while j < bytes.len() {
-        if bytes[j] == delim {
-            if j + 1 < bytes.len() && bytes[j + 1] == b'\'' {
+        if bytes[j] == delim
+            && j + 1 < bytes.len() && bytes[j + 1] == b'\'' {
                 return Some(j + 2 - i);
             }
-        }
         j += 1;
     }
     None

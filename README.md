@@ -86,6 +86,8 @@ pg://user:password@host:port/database
 
 Query parameters (unknown keys are errors): `connect_timeout_ms`, `call_timeout_ms`, `keepalive_s`, `protocol`, `sslmode`, `sslrootcert`, `application_name`, `statement_rollback`, `column_case`.
 
+Percent-encode special characters in user/password (`@` → `%40`, `:` → `%3A`); non-ASCII credentials must be percent-encoded UTF-8 (`пароль` → `%D0%BF...`).
+
 ## Quick example
 
 ```php

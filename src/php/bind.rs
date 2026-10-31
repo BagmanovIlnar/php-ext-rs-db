@@ -129,10 +129,10 @@ impl RsDataBaseBind {
     /// ```php
     /// $bind->setName(':id'); // same as setName('id')
     /// ```
-    pub fn set_name<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseBind>,
+    pub fn set_name(
+        self_: &mut ZendClassObject<RsDataBaseBind>,
         name: String,
-    ) -> PhpResult<&'a mut ZendClassObject<RsDataBaseBind>> {
+    ) -> PhpResult<&mut ZendClassObject<RsDataBaseBind>> {
         guard(|| {
             let normalized = normalize_bind_name(&name)?;
             self_.state.borrow_mut().name = Some(normalized);
@@ -173,10 +173,10 @@ impl RsDataBaseBind {
     /// $bind->setSize(4000);
     /// ```
     #[php(defaults(size = -1))]
-    pub fn set_size<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseBind>,
+    pub fn set_size(
+        self_: &mut ZendClassObject<RsDataBaseBind>,
         size: i64,
-    ) -> PhpResult<&'a mut ZendClassObject<RsDataBaseBind>> {
+    ) -> PhpResult<&mut ZendClassObject<RsDataBaseBind>> {
         guard(|| {
             self_.state.borrow_mut().size = size;
             Ok(())
@@ -190,10 +190,10 @@ impl RsDataBaseBind {
     /// $bind->setType(RsDataBasePrepare::INTEGER);
     /// $bind->setType(null); // auto-detect from the PHP value
     /// ```
-    pub fn set_type<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseBind>,
+    pub fn set_type(
+        self_: &mut ZendClassObject<RsDataBaseBind>,
         r#type: Option<String>,
-    ) -> PhpResult<&'a mut ZendClassObject<RsDataBaseBind>> {
+    ) -> PhpResult<&mut ZendClassObject<RsDataBaseBind>> {
         guard(|| {
             if let Some(t) = r#type.as_deref() {
                 if !is_known_bind_type(t) {
@@ -211,10 +211,10 @@ impl RsDataBaseBind {
     /// ```php
     /// $bind->setType(RsDataBasePrepare::COLLECTION)->setTdo('D_CL_ID');
     /// ```
-    pub fn set_tdo<'a>(
-        self_: &'a mut ZendClassObject<RsDataBaseBind>,
+    pub fn set_tdo(
+        self_: &mut ZendClassObject<RsDataBaseBind>,
         tdo: Option<String>,
-    ) -> PhpResult<&'a mut ZendClassObject<RsDataBaseBind>> {
+    ) -> PhpResult<&mut ZendClassObject<RsDataBaseBind>> {
         guard(|| {
             self_.state.borrow_mut().tdo = tdo;
             Ok(())

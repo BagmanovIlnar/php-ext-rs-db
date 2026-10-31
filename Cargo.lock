@@ -1259,7 +1259,6 @@ version = "0.0.1"
 dependencies = [
  "ext-php-rs",
  "hex",
- "native-tls",
  "once_cell",
  "openssl",
  "oracle",

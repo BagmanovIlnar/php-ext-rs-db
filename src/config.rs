@@ -212,8 +212,10 @@ mod tests {
 
     #[test]
     fn rejects_zero_max_connections() {
-        let mut c = Config::default();
-        c.max_connections_per_process = 0;
+        let c = crate::config::Config {
+            max_connections_per_process: 0,
+            ..Config::default()
+        };
         assert!(c.validate().is_err());
     }
 

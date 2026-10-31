@@ -203,7 +203,7 @@ pub fn shutdown() {
             let _ = catch_unwind(AssertUnwindSafe(|| close_state(&s)));
         }
     }
-    for (_, entry) in entries.iter() {
+    for entry in entries.values() {
         let st = entry.state.clone();
         let _ = catch_unwind(AssertUnwindSafe(|| close_state(&st)));
     }
