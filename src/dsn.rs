@@ -40,17 +40,14 @@ pub enum PgSslMode {
 
 /// Result column name casing policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum ColumnCase {
+    #[default]
     Upper,
     Lower,
     Native,
 }
 
-impl Default for ColumnCase {
-    fn default() -> Self {
-        ColumnCase::Upper
-    }
-}
 
 /// Oracle connection mode (DRCP vs dedicated).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -326,7 +323,6 @@ fn parse_userinfo(userinfo: &str) -> Result<(String, String), Error> {
 fn parse_host_port_path(host_path: &str) -> Result<(String, u16, &str), Error> {
     let (host_port, path) = host_path
         .split_once('/')
-        .map(|(hp, p)| (hp, p))
         .unwrap_or((host_path, ""));
 
     let (host, port_str) = if host_port.starts_with('[') {
@@ -539,7 +535,9 @@ fn format_host_for_display(host: &str) -> String {
 }
 
 fn percent_decode(input: &str) -> Result<String, Error> {
-    let mut out = String::with_capacity(input.len());
+    // Decode into raw bytes first, then interpret as UTF-8: pushing each byte as
+    // a `char` (Latin-1) would mangle multi-byte passwords/user names.
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -549,14 +547,14 @@ fn percent_decode(input: &str) -> Result<String, Error> {
             }
             let hi = hex_val(bytes[i + 1])?;
             let lo = hex_val(bytes[i + 2])?;
-            out.push(char::from((hi << 4) | lo));
+            out.push((hi << 4) | lo);
             i += 3;
         } else {
-            out.push(bytes[i] as char);
+            out.push(bytes[i]);
             i += 1;
         }
     }
-    Ok(out)
+    String::from_utf8(out).map_err(|_| Error::Dsn("user/password must be valid UTF-8".into()))
 }
 
 fn hex_val(b: u8) -> Result<u8, Error> {
@@ -603,6 +601,16 @@ mod tests {
         let d = Dsn::parse("pg://user%40x:pa%3Ass@host:5432/db").unwrap();
         assert_eq!(d.user, "user@x");
         assert_eq!(d.password, "pa:ss");
+    }
+
+    #[test]
+    fn parse_non_ascii_credentials_utf8() {
+        // Percent-encoded UTF-8 password must decode to the exact characters,
+        // not Latin-1 mojibake per byte.
+        let d = Dsn::parse("pg://user:%D0%B0%D0%B1%D0%B2@host:5432/db").unwrap();
+        assert_eq!(d.password, "абв");
+        let d2 = Dsn::parse("pg://user:пароль@host:5432/db").unwrap();
+        assert_eq!(d2.password, "пароль");
     }
 
     #[test]
